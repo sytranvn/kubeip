@@ -134,59 +134,61 @@ resource "google_container_node_pool" "public_node_pool" {
       kubeip      = "use"
       public      = "true"
     }
+    tags = ["http-server", "https-server", "allow-http"]
   }
 }
 
-resource "google_container_node_pool" "private_node_pool" {
-  name               = "private-node-pool"
-  location           = google_container_cluster.kubeip_cluster.location
-  cluster            = google_container_cluster.kubeip_cluster.name
-  initial_node_count = 1
-  autoscaling {
-    min_node_count  = 1
-    max_node_count  = 2
-    location_policy = "ANY"
-  }
-  node_config {
-    machine_type = var.machine_type
-    spot         = true
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/logging.write",
-      "https://www.googleapis.com/auth/monitoring",
-    ]
-    metadata = {
-      disable-legacy-endpoints = "true"
-    }
-    workload_metadata_config {
-      mode = "GKE_METADATA"
-    }
-    labels = {
-      nodegroup = "private"
-      kubeip    = "ignore"
-    }
-    resource_labels = {
-      environment = "demo"
-      kubeip      = "ignore"
-      public      = "false"
-    }
-  }
-  network_config {
-    enable_private_nodes = true
-  }
-}
+# resource "google_container_node_pool" "private_node_pool" {
+#   name               = "private-node-pool"
+#   location           = google_container_cluster.kubeip_cluster.location
+#   cluster            = google_container_cluster.kubeip_cluster.name
+#   initial_node_count = 1
+#   autoscaling {
+#     min_node_count  = 1
+#     max_node_count  = 2
+#     location_policy = "ANY"
+#   }
+#   node_config {
+#     machine_type = var.machine_type
+#     disk_size_gb = 10
+#     spot         = true
+#     oauth_scopes = [
+#       "https://www.googleapis.com/auth/logging.write",
+#       "https://www.googleapis.com/auth/monitoring",
+#     ]
+#     metadata = {
+#       disable-legacy-endpoints = "true"
+#     }
+#     workload_metadata_config {
+#       mode = "GKE_METADATA"
+#     }
+#     labels = {
+#       nodegroup = "private"
+#       kubeip    = "ignore"
+#     }
+#     resource_labels = {
+#       environment = "demo"
+#       kubeip      = "ignore"
+#       public      = "false"
+#     }
+#   }
+#   network_config {
+#     enable_private_nodes = true
+#   }
+# }
 
 # Create static public IP addresses
 resource "google_compute_address" "static_ip" {
   provider           = google-beta
   project            = var.project_id
-  count              = 5
-  name               = "static-ip${var.ipv6_support ? "v6": "v4"}-${count.index}"
+  count              = var.public_ip_count
+  name               = "static-ip${var.ipv6_support ? "v6" : "v4"}-${count.index}"
   ip_version         = var.ipv6_support ? "IPV6" : "IPV4"
   ipv6_endpoint_type = "VM"
   address_type       = "EXTERNAL"
   region             = google_container_cluster.kubeip_cluster.location
   subnetwork         = var.ipv6_support ? google_compute_subnetwork.kubeip_subnet.id : ""
-  labels             = {
+  labels = {
     environment = "demo"
     kubeip      = "reserved"
   }
@@ -195,8 +197,8 @@ resource "google_compute_address" "static_ip" {
 data "google_client_config" "provider" {}
 
 provider "kubernetes" {
-  host                   = "https://${google_container_cluster.kubeip_cluster.endpoint}"
-  token                  = data.google_client_config.provider.access_token
+  host  = "https://${google_container_cluster.kubeip_cluster.endpoint}"
+  token = data.google_client_config.provider.access_token
   cluster_ca_certificate = base64decode(
     google_container_cluster.kubeip_cluster.master_auth[0].cluster_ca_certificate,
   )
@@ -205,8 +207,8 @@ provider "kubernetes" {
 # Create Kubernetes service account in kube-system namespace
 resource "kubernetes_service_account" "kubeip_service_account" {
   metadata {
-    name        = "kubeip-service-account"
-    namespace   = "kube-system"
+    name      = "kubeip-service-account"
+    namespace = "kube-system"
     annotations = {
       "iam.gke.io/gcp-service-account" = google_service_account.kubeip_service_account.email
     }
@@ -264,7 +266,7 @@ resource "kubernetes_daemonset" "kubeip_daemonset" {
   metadata {
     name      = "kubeip-agent"
     namespace = "kube-system"
-    labels    = {
+    labels = {
       app = "kubeip"
     }
   }
@@ -351,5 +353,37 @@ resource "kubernetes_daemonset" "kubeip_daemonset" {
   depends_on = [
     kubernetes_service_account.kubeip_service_account,
     google_container_cluster.kubeip_cluster
+  ]
+}
+
+resource "kubernetes_pod_v1" "example" {
+  metadata {
+    name      = "example-pod"
+    namespace = "kube-system"
+    labels = {
+      app = "MyApp"
+    }
+  }
+
+  spec {
+    host_network = true
+    node_selector = {
+      kubeip    = "use"
+      nodegroup = "public"
+    }
+
+    container {
+      image = "nginx:latest"
+      name  = "example"
+      env {
+        name  = "VIRTUAL_HOST"
+        value = "api64.ipify.org"
+      }
+    }
+  }
+  depends_on = [
+    kubernetes_daemonset.kubeip_daemonset,
+    google_container_cluster.kubeip_cluster
+
   ]
 }

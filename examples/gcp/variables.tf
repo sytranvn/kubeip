@@ -17,6 +17,11 @@ variable "vpc_name" {
   default = "kubeip-demo"
 }
 
+variable "public_ip_count" {
+  type    = number
+  default = 2
+}
+
 variable "subnet_range" {
   type    = string
   default = "10.128.0.0/20"
@@ -56,3 +61,4 @@ variable "kubeip_version" {
   type    = string
   default = "latest"
 }
+
